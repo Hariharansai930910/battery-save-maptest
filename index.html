@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Accurate Delivery Map with Battery Saver</title>
+  <title>Accurate Delivery Map with Directions</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css" />
@@ -9,11 +9,30 @@
     #map { height: 100vh; width: 100%; }
     #info {
       position: absolute;
-      top: 10px; left: 10px; z-index: 1000;
-      background: white; padding: 10px;
-      border-radius: 8px; box-shadow: 0 0 5px #999;
-      font-family: sans-serif; font-size: 14px;
+      top: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: white;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 0 5px #999;
+      font-family: sans-serif;
+      font-size: 14px;
       max-width: 90%;
+    }
+    #directions {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      max-height: 200px;
+      overflow-y: auto;
+      background: white;
+      font-family: sans-serif;
+      font-size: 13px;
+      padding: 10px;
+      border-top: 1px solid #ccc;
+      z-index: 1000;
     }
   </style>
 </head>
@@ -26,9 +45,13 @@
       <input type="checkbox" id="batteryToggle" checked />
     </label>
   </div>
-  <div id="status">Locating... ⏳</div>
+  <div id="userStatus">Locating... ⏳</div>
+  <hr>
+  <div id="destinationStatus">Click on map to select destination</div>
 </div>
+
 <div id="map"></div>
+<div id="directions"><strong>🧭 Directions will appear here</strong></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
@@ -41,7 +64,7 @@ let isBatterySaver = true;
 
 const routeColors = ['#ff6b6b', '#6bc5ff', '#6bff95', '#ffc36b', '#d36bff', '#ff6bd6'];
 let colorIndex = 0;
-const pinSizeDegrees = 0.00001; // ~1cm grid
+const pinSizeDegrees = 0.00001;
 
 function getNextColor() {
   const color = routeColors[colorIndex % routeColors.length];
@@ -49,12 +72,11 @@ function getNextColor() {
   return color;
 }
 
-// Load tiles
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 22
 }).addTo(map);
 
-// Get user location and update marker
+// GPS Tracking
 function getUserLocation() {
   navigator.geolocation.getCurrentPosition(pos => {
     const lat = pos.coords.latitude;
@@ -72,37 +94,34 @@ function getUserLocation() {
     }
 
     map.setView([lat, lng], 20);
-    document.getElementById('status').innerText = `📍 You: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    document.getElementById('userStatus').innerText = `📍 You: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
   }, () => {
-    document.getElementById('status').innerText = '⚠️ GPS not available';
+    document.getElementById('userStatus').innerText = '⚠️ GPS not available';
   });
 }
 
-// Start polling GPS based on interval
 function startGPSPolling(intervalMs) {
   if (gpsInterval) clearInterval(gpsInterval);
   getUserLocation();
   gpsInterval = setInterval(getUserLocation, intervalMs);
 }
 
-// Battery saver toggle
 document.getElementById('batteryToggle').addEventListener('change', (e) => {
   isBatterySaver = e.target.checked;
   const interval = isBatterySaver ? 60000 : 5000;
   startGPSPolling(interval);
 });
 
-// Initial polling
 startGPSPolling(60000);
 
-// Reverse geocode
+// Reverse Geocode
 function getAddress(lat, lng, callback = null) {
   const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`;
   fetch(url)
     .then(res => res.json())
     .then(data => {
       const address = data.display_name || 'Address not found';
-      const infoBox = document.getElementById('status');
+      const infoBox = document.getElementById('destinationStatus');
       infoBox.innerHTML = `
         <strong>🏁 Destination:</strong> ${address}<br>
         <strong>📍 Coords:</strong> ${lat.toFixed(5)}, ${lng.toFixed(5)}
@@ -111,7 +130,7 @@ function getAddress(lat, lng, callback = null) {
     });
 }
 
-// Drop destination pin + draw route
+// On Pin Drop
 map.on('click', function (e) {
   const { lat, lng } = e.latlng;
 
@@ -119,7 +138,10 @@ map.on('click', function (e) {
     destinationPin.setLatLng(e.latlng);
   } else {
     destinationPin = L.circleMarker([lat, lng], {
-      radius: 6, fillColor: '#2962ff', color: '#2962ff', fillOpacity: 1
+      radius: 6,
+      fillColor: '#2962ff',
+      color: '#2962ff',
+      fillOpacity: 1
     }).addTo(map).bindPopup("Destination").openPopup();
   }
 
@@ -145,19 +167,27 @@ map.on('click', function (e) {
           serviceUrl: 'https://router.project-osrm.org/route/v1'
         })
       }).on('routesfound', function(e) {
-        const distance = e.routes[0].summary.totalDistance / 1000;
-        const time = e.routes[0].summary.totalTime / 60;
-        const infoBox = document.getElementById('status');
-        infoBox.innerHTML += `
+        const route = e.routes[0];
+        const distance = route.summary.totalDistance / 1000;
+        const time = route.summary.totalTime / 60;
+
+        document.getElementById('destinationStatus').innerHTML += `
           <br><strong>📏 Distance:</strong> ${distance.toFixed(2)} km
           <br><strong>⏱️ ETA:</strong> ${time.toFixed(1)} min
         `;
+
+        let directionsHtml = `<strong>🧭 Turn-by-turn Directions:</strong><ol>`;
+        route.instructions.forEach(step => {
+          directionsHtml += `<li>${step.text} <small>(${step.distance} m)</small></li>`;
+        });
+        directionsHtml += `</ol>`;
+        document.getElementById('directions').innerHTML = directionsHtml;
       }).addTo(map);
     }
   });
 });
 
-// Draw transparent 1cm pin grid
+// Transparent Pin Grid
 function drawPinGrid() {
   if (pinGridLayer) map.removeLayer(pinGridLayer);
   const bounds = map.getBounds();
@@ -180,7 +210,6 @@ function drawPinGrid() {
   requestAnimationFrame(() => pinGridLayer.addTo(map));
 }
 
-// On map move, trigger pin grid redraw
 map.on('moveend', () => {
   if (map.getZoom() >= 19) {
     drawPinGrid();
